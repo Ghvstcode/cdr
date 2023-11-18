@@ -154,12 +154,13 @@ func handleWebSocketConnection(ws *websocket.Conn, pubsub *pb.Pubsub) {
 				subscribedTopics[msg.Topic] = true
 				pubsub.Subscribe(msg.Topic, wsChan)
 			}
+
 			pubsub.Publish(msg.Topic, msg.Content)
 		}
 	}()
 
 	wg.Wait()
-	close(wsChan) // Close the channel once all processing is done.
+	//close(wsChan) // Close the channel once all processing is done.
 }
 
 // setupConnection configures WebSocket connection settings.
@@ -181,6 +182,7 @@ func messageReader(ws *SafeWebSocketConn, messageChan chan<- Message) {
 			log.Printf("ReadJSON error: %v", err)
 			break
 		}
+
 		messageChan <- msg
 	}
 }

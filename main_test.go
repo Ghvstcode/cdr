@@ -4,8 +4,10 @@ import (
 	"context"
 	pb "github.com/Ghvstcode/cdr/pkg/pubsub"
 	"github.com/gorilla/websocket"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,7 +29,8 @@ func createTestWebSocketConnection(t *testing.T, server *httptest.Server) *webso
 // TestWebSocketConnection verifies basic WebSocket connection functionality.
 func TestWebSocketConnection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocketUpgrade(t, w, r)
+		pubsub := pb.NewPubsub()
+		handleWebSocketUpgrade(t, w, r, pubsub)
 	}))
 	defer server.Close()
 
@@ -36,20 +39,20 @@ func TestWebSocketConnection(t *testing.T) {
 }
 
 // handleWebSocketUpgrade upgrades an HTTP request to a WebSocket connection.
-func handleWebSocketUpgrade(t *testing.T, w http.ResponseWriter, r *http.Request) {
+func handleWebSocketUpgrade(t *testing.T, w http.ResponseWriter, r *http.Request, pubsub *pb.Pubsub) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		t.Fatalf("Failed to upgrade to WebSocket: %v", err)
 	}
 	defer ws.Close()
-	pubsub := pb.NewPubsub()
+	//pubsub := pb.NewPubsub()
 	handleWebSocketConnection(ws, pubsub)
 }
 
 // TestMessagePublishSubscribe checks the publish-subscribe functionality.
 func TestMessagePublishSubscribe(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocketUpgrade(t, w, r)
+		handleWebSocketUpgrade(t, w, r, pb.NewPubsub())
 	}))
 	defer server.Close()
 
@@ -112,7 +115,7 @@ func triggerShutdown(t *testing.T, stopChan chan os.Signal, s *http.Server) {
 // TestMultipleWebSocketConnections ensures handling of multiple connections.
 func TestMultipleWebSocketConnections(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocketUpgrade(t, w, r)
+		handleWebSocketUpgrade(t, w, r, pb.NewPubsub())
 	}))
 	defer server.Close()
 
@@ -132,7 +135,7 @@ func createMultipleConnections(t *testing.T, server *httptest.Server, numConnect
 // TestPingPong verifies the ping/pong mechanism.
 func TestPingPong(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocketUpgrade(t, w, r)
+		handleWebSocketUpgrade(t, w, r, pb.NewPubsub())
 	}))
 	defer server.Close()
 
@@ -148,4 +151,85 @@ func testPingPongMechanism(t *testing.T, ws *websocket.Conn) {
 	if err != nil {
 		t.Errorf("Failed to write ping message: %v", err)
 	}
+}
+
+// TestMessageDeliveryToMultipleSubscribers verifies message delivery to multiple subscribers.
+func TestMessageDeliveryToMultipleSubscribers(t *testing.T) {
+	ps := pb.NewPubsub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleWebSocketUpgrade(t, w, r, ps)
+	}))
+	defer server.Close()
+
+	ws1, ws2 := createTestWebSocketConnection(t, server), createTestWebSocketConnection(t, server)
+
+	testMessageDelivery(t, ws1, ws2, "testTopic", "testMessage", ps)
+}
+
+func testMessageDelivery(t *testing.T, ws1, ws2 *websocket.Conn, topic, message string, pubsubService *pb.Pubsub) {
+	msgs1, msgs2 := make(chan string), make(chan string)
+	go readMessages(ws1, msgs1)
+	go readMessages(ws2, msgs2)
+	subscribeAndPublish(t, ws1, ws2, topic, message, pubsubService)
+	waitForExpectedMessage(t, msgs2, message)
+}
+
+func subscribeAndPublish(t *testing.T, ws1, ws2 *websocket.Conn, topic, message string, pubsubService *pb.Pubsub) {
+	// Subscribe both connections to a topic
+	subscribe(t, ws1, topic)
+	subscribe(t, ws2, topic)
+
+	time.Sleep(5 * time.Second)
+
+	publish(t, ws1, topic, message)
+}
+
+// subscribe subscribes a WebSocket connection to a topic.
+func subscribe(t *testing.T, ws *websocket.Conn, topic string) {
+	msg := Message{Topic: topic, Content: "establishSubscription"}
+	if err := ws.WriteJSON(msg); err != nil {
+		t.Fatalf("Failed to write subscription JSON: %v", err)
+	}
+}
+
+// publish sends a message on a topic from a WebSocket connection.
+func publish(t *testing.T, ws *websocket.Conn, topic, content string) {
+	msg := Message{Topic: topic, Content: content}
+	if err := ws.WriteJSON(msg); err != nil {
+		t.Fatalf("Failed to publish message: %v", err)
+	}
+}
+
+// waitForExpectedMessage waits for a specific message on a channel.
+func waitForExpectedMessage(t *testing.T, msgs chan string, expectedMessage string) {
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case message := <-msgs:
+			if message == expectedMessage {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("Timeout waiting for expected message: '%s'", expectedMessage)
+		}
+	}
+}
+
+// readMessages continuously reads messages from a WebSocket connection and sends them to a channel.
+// This function is used for testing message delivery in publish-subscribe scenarios.
+func readMessages(ws *websocket.Conn, messages chan<- string) {
+	for {
+		_, msg, err := ws.ReadMessage()
+		if err != nil {
+			// Log and exit the loop if there's an error reading messages.
+			// This could happen if the connection is closed.
+			log.Printf("Error reading message: %v", err)
+			break
+		}
+		// Send the received message to the channel.
+		messages <- string(msg)
+	}
+	// Close the channel to signal that no more messages will be sent.
+	close(messages)
 }

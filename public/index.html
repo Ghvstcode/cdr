@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Chat Rooms</title>
+    <style>
+        /* General Body Styling */
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        /* Header Styling */
+        h1 {
+            color: #333;
+        }
+
+        /* Input and Button Styling */
+        input[type="text"] {
+            padding: 10px;
+            margin: 10px;
+            width: 300px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #5cb85c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #4cae4c;
+        }
+
+        /* Message Display Styling */
+        #messages {
+            margin-top: 20px;
+            padding: 20px;
+            background: #fff;
+            border: 1px solid #ddd;
+            height: 300px;
+            overflow-y: auto;
+        }
+
+        #messages p {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        /* Current Room Display Styling */
+        #currentRoom {
+            font-weight: bold;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+<h1>WebSocket Chat Rooms</h1>
+<input type="text" id="roomInput" placeholder="Enter Room Code">
+<button id="joinRoomButton">Join Room</button>
+<button id="createRoomButton">Create New Room</button>
+<br><br>
+<div>Current Room: <span id="currentRoom"></span></div>
+<br><br>
+<input type="text" id="messageInput" placeholder="Type a message" disabled>
+<button id="sendMessageButton" disabled>Send Message</button>
+<br><br>
+<div id="messages"></div>
+</body>
+<script src="script.js"></script>
+</html>
