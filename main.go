@@ -41,10 +41,25 @@ type Message struct {
 	Content string `json:"message"`
 }
 
+type SafeWebSocketConn struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex // Mutex for synchronizing write operations
+}
+
 func main() {
 	if err := setupServer(); err != nil {
 		log.Fatalf("Failed to set up server: %v", err)
 	}
+}
+
+func NewSafeWebSocketConn(conn *websocket.Conn) *SafeWebSocketConn {
+	return &SafeWebSocketConn{conn: conn}
+}
+
+func (swsc *SafeWebSocketConn) writeToWebSocket(msgType int, data []byte) error {
+	swsc.writeMu.Lock()
+	defer swsc.writeMu.Unlock()
+	return swsc.conn.WriteMessage(msgType, data)
 }
 
 // setupServer initializes and starts the HTTP server with WebSocket support.
@@ -111,23 +126,24 @@ func handleWebSocketRequest(w http.ResponseWriter, r *http.Request, pubsubServic
 // handleWebSocketConnection manages a WebSocket connection.
 func handleWebSocketConnection(ws *websocket.Conn, pubsub *pb.Pubsub) {
 
-	defer func() {
-		// Close the WebSocket connection gracefully.
-		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
-		ws.WriteMessage(websocket.CloseMessage, closeMsg)
-		log.Println("Closing WebSocket connection")
-	}()
-
 	setupConnection(ws)
 
+	safeWs := NewSafeWebSocketConn(ws)
 	subscribedTopics := make(map[string]bool)
 	wsChan := make(chan string)
 	messageChan := make(chan Message)
 	var wg sync.WaitGroup
 
+	defer func() {
+		// Close the WebSocket connection gracefully.
+		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+		safeWs.writeToWebSocket(websocket.CloseMessage, closeMsg)
+		log.Println("Closing WebSocket connection")
+	}()
+
 	// Setup goroutines for sending and receiving messages.
-	go sendMessages(ws, wsChan)
-	go messageReader(ws, messageChan)
+	go sendMessages(safeWs, wsChan)
+	go messageReader(safeWs, messageChan)
 
 	// Process incoming messages and manage subscriptions.
 	wg.Add(1)
@@ -157,11 +173,11 @@ func setupConnection(ws *websocket.Conn) {
 }
 
 // messageReader reads messages from the WebSocket and sends them to messageChan.
-func messageReader(ws *websocket.Conn, messageChan chan<- Message) {
+func messageReader(ws *SafeWebSocketConn, messageChan chan<- Message) {
 	defer close(messageChan)
 	for {
 		var msg Message
-		if err := ws.ReadJSON(&msg); err != nil {
+		if err := ws.conn.ReadJSON(&msg); err != nil {
 			log.Printf("ReadJSON error: %v", err)
 			break
 		}
@@ -170,7 +186,7 @@ func messageReader(ws *websocket.Conn, messageChan chan<- Message) {
 }
 
 // sendMessages sends messages to the WebSocket client.
-func sendMessages(ws *websocket.Conn, wsChan <-chan string) {
+func sendMessages(ws *SafeWebSocketConn, wsChan <-chan string) {
 	ticker := time.NewTicker(PingPeriod)
 	defer ticker.Stop()
 
@@ -178,20 +194,12 @@ func sendMessages(ws *websocket.Conn, wsChan <-chan string) {
 		select {
 		case msg, ok := <-wsChan:
 			if !ok {
-				writeToWebsocket(ws, websocket.CloseMessage, "")
+				ws.writeToWebSocket(websocket.CloseMessage, []byte(""))
 				return
 			}
-			writeToWebsocket(ws, websocket.TextMessage, msg)
+			ws.writeToWebSocket(websocket.TextMessage, []byte(msg))
 		case <-ticker.C:
-			writeToWebsocket(ws, websocket.PingMessage, "")
+			ws.writeToWebSocket(websocket.PingMessage, []byte(""))
 		}
-	}
-}
-
-// writeToWebsocket writes a message of a specific type to the WebSocket.
-func writeToWebsocket(ws *websocket.Conn, msgType int, msg string) {
-	ws.SetWriteDeadline(time.Now().Add(WriteWait))
-	if err := ws.WriteMessage(msgType, []byte(msg)); err != nil {
-		log.Printf("WriteMessage error: %v", err)
 	}
 }
